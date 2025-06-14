@@ -61,7 +61,7 @@ function ball_update()
 
   -- check if hole
   if next_tile_k == 18 then
-    if hole_num == 1 then
+    if hole_num != #holes then
       hole_num += 1
       init_hole(hole_num)
      else
