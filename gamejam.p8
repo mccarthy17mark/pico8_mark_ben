@@ -3,13 +3,16 @@ version 42
 __lua__
 --gamejam spoopy (aka fun-scary) minigolf
 
-ball={x=8,y=8, dx=0, dy=0, k=48, k_i = 0}
-arrow={x=0,y=0}
---holes = {1}
+ball = {x=8,y=8, dx=0, dy=0, k=48, k_i = 0}
+arrow = {x=0,y=0}
+
+holes = {}
+holes[1] = {ball_x = 8, ball_y = 8, cam_x = 0, cam_y = 0}
+holes[2] = {ball_x = 19.5, ball_y = 5.5, cam_x = 16*8, cam_y = 0}
 friction = 0.2
 
 shot_counter = 0
-
+shot_display = {x=0, y=0, text = "shot no: "}
 shot_angle = 0
 
 ball_stopped = false
@@ -35,6 +38,18 @@ function read_input()
   end
 end
 
+function init_hole(num)
+  ball.x = holes[num].ball_x
+  ball.y = holes[num].ball_y
+  camera(holes[num].cam_x,holes[num].cam_y)
+  ball.dx = 0
+  ball.dy = 0
+  ball_stopped = true
+  -- we can add an offset here. Gets updated rarely, not once per frame
+  shot_display.x = holes[num].cam_x
+  shot_display.y = holes[num].cam_y
+end
+
 function ball_update()
   cur_tile_x = flr(ball.x + 0.5)
   cur_tile_y = flr(ball.y + 0.5)
@@ -46,14 +61,9 @@ function ball_update()
 
   -- check if hole
   if next_tile_k == 18 then
-    if hole_num == 1 then
-      hole_num = 2
-      ball.x = 19.5
-      ball.y = 5.5
-      ball.dx = 0
-      ball.dy = 0
-      ball_stopped = true
-      camera(16*8,0) -- one screen over
+    if hole_num != #holes then
+      hole_num += 1
+      init_hole(hole_num)
      else
       win = true
      end
@@ -69,7 +79,7 @@ function ball_update()
     end
   end
 
-  ball_angle =	atan2(ball.dx, ball.dy)
+  ball_angle = atan2(ball.dx, ball.dy)
 
   ball.x += ball.dx
   ball.y += ball.dy
@@ -88,40 +98,39 @@ function ball_update()
 end
 
 function _update()
-  read_input()
+  if not win then
+    read_input()
+  end
   ball_update()
 end
 
 function draw_ball()
-  if win then 
-    return
-  end
 
   ball.k_i = (ball.k_i+1)%4
   if ball_stopped == false  and ball.k_i == 0 then 
     if 1/8<=ball_angle and ball_angle < 3/8 then
-      --rolldir = "up"
+      --up
       if ball.k>=32 then
         ball.k=(ball.k+1)%4 + 32
       else
         ball.k=32
       end
     elseif 3/8<=ball_angle and ball_angle < 5/8 then
-      --rolldir = "left"
+      --left
       if ball.k>=48 then
         ball.k=(ball.k-1)%4 + 48
       else
         ball.k=48
       end
     elseif 5/8<=ball_angle and ball_angle < 7/8 then
-      --rolldir = "down"
+      --down
       if ball.k>=32 then
         ball.k=(ball.k-1)%4 + 32
       else
         ball.k=32
       end
     else
-      --rolldir = "right"
+      --right
       if ball.k>=48 then
         ball.k=(ball.k+1)%4 + 48
       else
@@ -140,6 +149,13 @@ function draw_arrow()
   circ(8*(arrow.x + cos(shot_angle)/3), 8*(arrow.y + sin(shot_angle)/3), 2, arrow_colour)
 end
 
+function draw_display()
+  if win then
+    print("winner!", holes[hole_num].cam_x + 8*8, holes[hole_num].cam_y, 7)
+  end
+  print(shot_display.text .. shot_counter, shot_display.x, shot_display.y, 7)
+end
+
 function _draw()
 	cls()
   map()
@@ -148,12 +164,9 @@ function _draw()
     if ball_stopped then
     draw_arrow()
     end
-  else
-    print("winner!", (hole_num - 1)*16*8 + 8*8,0,7)
   end
 
-  shot_text = "shot no: "
-  print(shot_text .. shot_counter, (hole_num - 1)*16*8, 0, 7)
+  draw_display()
 
 end
 __gfx__
