@@ -4,7 +4,9 @@ __lua__
 --gamejam spoopy (aka fun-scary) minigolf
 
 ball = {x=8,y=8, dx=0, dy=0, k=48, k_i = 0}
-arrow = {x=0,y=0}
+-- in theory we can calc this stuff from the above, but it prob saves time to cache it
+ball_stopped = false
+ball_angle = 0
 
 holes = {}
 holes[1] = {ball_x = 8, ball_y = 8, cam_x = 0, cam_y = 0}
@@ -12,29 +14,25 @@ holes[2] = {ball_x = 19.5, ball_y = 5.5, cam_x = 16*8, cam_y = 0}
 friction = 0.2
 
 shot_counter = 0
-shot_display = {x=0, y=0, text = "shot no: "}
+shot_display = {x=1, y=1, text = "stroke no: "}
 shot_angle = 0
 
-ball_stopped = false
-ball_angle = 0
-
-arrow_colour = 7
 
 hole_num = 1
 
 win = false
 
 function read_input()
-		speed = 1
+	local speed = 1
   if btnp(5) then
     ball.dx = -speed*cos(shot_angle)
     ball.dy = -speed*sin(shot_angle)
     ball_stopped = false
     shot_counter += 1
   elseif btn(0) then
-    shot_angle -= 0.05
+    shot_angle -= 0.03
   elseif btn(1) then
-    shot_angle += 0.05
+    shot_angle += 0.03
   end
 end
 
@@ -46,18 +44,18 @@ function init_hole(num)
   ball.dy = 0
   ball_stopped = true
   -- we can add an offset here. Gets updated rarely, not once per frame
-  shot_display.x = holes[num].cam_x
-  shot_display.y = holes[num].cam_y
+  shot_display.x = holes[num].cam_x + 1
+  shot_display.y = holes[num].cam_y + 1
 end
 
 function ball_update()
-  cur_tile_x = flr(ball.x + 0.5)
-  cur_tile_y = flr(ball.y + 0.5)
-  cur_tile_k = mget(cur_tile_x, cur_tile_y)
+  local cur_tile_x = flr(ball.x + 0.5)
+  local cur_tile_y = flr(ball.y + 0.5)
+  local cur_tile_k = mget(cur_tile_x, cur_tile_y)
   -- check for collision with walls
-  next_tile_x = flr((ball.x + 0.5) + ball.dx)
-  next_tile_y = flr((ball.y + 0.5) + ball.dy)
-  next_tile_k = mget(next_tile_x , next_tile_y)
+  local next_tile_x = flr((ball.x + 0.5) + ball.dx)
+  local next_tile_y = flr((ball.y + 0.5) + ball.dy)
+  local next_tile_k = mget(next_tile_x , next_tile_y)
 
   -- check if hole
   if next_tile_k == 18 then
@@ -71,10 +69,33 @@ function ball_update()
 
   -- check if wall
   if next_tile_k == 17 then
-    if cur_tile_x != next_tile_x then
+    local delta_tile_x = next_tile_x - cur_tile_x
+    local delta_tile_y = next_tile_y - cur_tile_y
+    
+    if delta_tile_x*delta_tile_y!=0 then
+      -- need to determine what kind of corner we're hitting.
+      next_tile_kx = mget(next_tile_x , cur_tile_y)
+      next_tile_ky = mget(cur_tile_x , next_tile_y)
+      if next_tile_kx == 17 and next_tile_ky == 17 then
+        --it's an inside corner
+        ball.dx *= -1;
+        ball.dy *= -1;
+      elseif next_tile_kx == 17 then
+        --it's a vertical wall
+        ball.dx *= -1;
+      elseif next_tile_ky == 17 then
+        -- it's a horizontal wall
+        ball.dy *= -1;
+      else
+        -- it's an outside corner... just bounce directly back, I guess?
+        ball.dx *= -1;
+        ball.dy *= -1;
+      end
+    elseif delta_tile_x != 0 then
+      -- it's a vertical wall
       ball.dx *= -1;
-    end
-    if cur_tile_y != next_tile_y  then
+    elseif delta_tile_y != 0 then
+      -- it's a horizontal wall
       ball.dy *= -1;
     end
   end
@@ -95,6 +116,10 @@ function ball_update()
     ball_stopped = false
   end
 
+end
+
+function _init()
+  init_hole(1)
 end
 
 function _update()
@@ -143,15 +168,17 @@ function draw_ball()
 end
 
 function draw_arrow()
+  local arrow = {x=0,y=0, colour = 7}
   arrow.x = ball.x + 0.5 + cos(shot_angle)
   arrow.y = ball.y + 0.5 + sin(shot_angle)
-  line(8*(arrow.x + cos(shot_angle)), 8*(arrow.y + sin(shot_angle)), 8*arrow.x, 8*arrow.y, arrow_colour)
-  circ(8*(arrow.x + cos(shot_angle)/3), 8*(arrow.y + sin(shot_angle)/3), 2, arrow_colour)
+  line(8*(arrow.x + cos(shot_angle)), 8*(arrow.y + sin(shot_angle)), 8*arrow.x, 8*arrow.y, arrow.colour)
+  circ(8*(arrow.x + cos(shot_angle)/3), 8*(arrow.y + sin(shot_angle)/3), 2, arrow.colour)
 end
 
 function draw_display()
+  rectfill(holes[hole_num].cam_x, holes[hole_num].cam_y, holes[hole_num].cam_x + 8*16, holes[hole_num].cam_y + 8*2, 5)
   if win then
-    print("winner!", holes[hole_num].cam_x + 8*8, holes[hole_num].cam_y, 7)
+    print("winner!", holes[hole_num].cam_x + 8*8, holes[hole_num].cam_y+1, 7)
   end
   print(shot_display.text .. shot_counter, shot_display.x, shot_display.y, 7)
 end
