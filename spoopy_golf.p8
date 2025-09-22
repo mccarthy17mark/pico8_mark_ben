@@ -1,56 +1,261 @@
 pico-8 cartridge // http://www.pico-8.com
 version 42
 __lua__
---gamejam spoopy (aka fun-scary) minigolf
+-- spoopy (aka fun-scary) minigolf
 
-ball = {x=8*8,y=8*8, dx=0, dy=0, k=48, k_i = 0}
--- in theory we can calc this stuff from the above, but it prob saves time to cache it
-ball_stopped = false
-ball_angle = 0
+--Class def'ns here
 
-holes = {}
-holes[1] = {ball_x = 8*8, ball_y = 8*8, cam_x = 0, cam_y = 0}
-holes[2] = {ball_x = 19.5*8, ball_y = 5.5*8, cam_x = 16*8, cam_y = 0}
-friction = 0.2
-
-shot_counter = 0
-shot_display = {x=1, y=1, text = "stroke no: "}
-shot_angle = 0
-
-
-hole_num = 1
-
-win = false
+--Note to self: Screen is 16*16 tiles... 128*128 px
+-- tiles are 8px*8px
+-- the various draw shape functions (circ(),line()) are in terms of global map pixels (g)
+-- for angles, 0 is right, 0.25 is up, sin is actually -sin: down is pos up is neg
+ -- atan2(1,0) is right, and returns 0. atan2(0,-1) is up and returns 0.25, etc
 
 vec2d = {}
 vec2d.__index = vec2d
-function vec2d:new(x,y)
+
+function vec2d.new(x,y)
  local self = setmetatable({},vec2d)
  self.x = x
  self.y = y
  return self
 end
 
--- recall 0 is right, 0.25 is up, etc
--- recall sin is actually -sin: down is pos up is neg
-function vec2d:rotate(angle, pivot)
- local translated_x = self.x - pivot.x
- local translated_y = self.y - pivot.y
+-- this makes vec2d(1,2) the same as vec2d.new(1,2)
+setmetatable(vec2d, {__call = vec2d.new})
 
- self.x = (translated_x*cos(angle) - translated_y*sin(angle)) + pivot.x
- self.y = (translated_x*sin(angle) + translated_y*cos(angle)) + pivot.y
+-- add two vectors
+function vec2d.__add(a,b)
+ return vec2d(a.x + b.x, a.y + b.y)
+end
+
+-- subtract two vectors
+function vec2d.__sub(a,b)
+ return vec2d(a.x - b.x, a.y - b.y)
+end
+
+-- multiply vector and scalar
+function vec2d.__mul(a,b)
+ return vec2d(a.x * b, a.y * b)
+end
+
+-- divide vector by scalar
+function vec2d.__div(a,b)
+ return vec2d(a.x / b, a.y / b)
+end
+
+-- Check if two vectors are equal
+function vec2d.__eq(a,b)
+ return (a.x == b.x and a.y == b.y)
+end
+
+-- negate a vector (unary minus)
+function vec2d.__unm(a)
+ return vec2d(-a.x, -a.y)
+end
+
+function vec2d.rotate(angle, pivot)
+ -- angle is scalar, pivot is vec2d
+ -- functions like this ought to not modify the original vector. If you want it modified, do:
+  -- vec = vec.rotate(angle,pivot)
+ local new_vec = self - pivot
+ new_vec.x = new_vec.x*cos(angle) - new_vec.y*sin(angle)
+ new_vec.y = new_vec.x*sin(angle) + new_vec.y*cos(angle)
+ return new_vec + pivot
+end
+
+-- do we really need this?
+function table_to_string(table)
+ local str = ""
+ for k,v in pairs(table) do
+  str+=k.."="..v..", "
+ end
+ return str
+end
+
+function vec2d.to_string()
+ return "("..self.x..","..self.y..")"
+end
+
+function vec2d.magnitude()
+ return sqrt(self.x^2 + self.y^2)
+end
+
+function vec2d.angle()
+ return atan2(self.x,self.y)
+end
+
+function vec2d.reflect(normal)
+ -- 
+ local angle_diff = normal.angle() - self.angle()
+ if angle_diff < -0.5 then
+  angle_diff += 1
+ elseif angle_diff >0.5 then
+  angle_diff -= 1
+ end
+
+ return self.rotate(2*angle_diff, vec2d(0,0))
+end
+
+box2d = {}
+box2d.__index = box2d
+
+function box2d.new(x,y,w,h)
+ local self = setmetatable({},box2d)
+ self.x = x
+ self.y = y
+ self.w = w
+ self.h = h
  return self
 end
 
-function vec2d:to_string()
- return "x: "..self.x..", y: "..self.y
+setmetatable(box2d, {__call = box2d.new})
+
+function box2d.contains(point)
+ -- the edges of the box are (not?) included in the box
+ if point.x >= self.x and point.x <= self.x+self.w and point.y >= self.y and point.y <= self.y + self.h then
+  return true
+ end
+ return false
+end
+
+function box2d.centre()
+ return vec2d((self.x+self.w)/2,(self.y+self.h)/2)
+end
+
+-->8
+-- Utility functions here
+
+-- The location of the camera, in pixels, relative to the global map
+g_camera = vec2d(0,0)
+
+-- s is a pixel location relative to a sprite
+-- ss is a pixel location relative to the spritesheet
+-- g is a pixel location relative to the global map
+-- c is a pixel location relative to the camera
+-- k refers to sprite number
+-- everything with a 't' in it is a location in units of tiles
+
+function s2ss(sprite_k, s)
+ local row = flr(sprite_k / 16) -- starting at zero
+ local column = sprite_k % 16 -- starting at zero
+ return vec2d(s.x+column*8, s.y+row*8)
+end
+
+function s2colour(sprite_k, s)
+ local ss = s2ss(sprite_k, s)
+ return sget(ss.x, ss.y)
+end
+
+function g2c(g)
+ return g - g_camera
+end
+
+function c2g(c)
+ return c + g_camera
+end
+
+function g2gt(g)
+ return vec2d(flr(g.x/8), flr(g.y/8))
+end
+
+function gt2k(gt)
+ return mget(gt.x, gt.y)
+end
+
+function g2k(g)
+ return gt2k(g2gt(g))
+end
+
+function k2ss(k)
+ return vec2d((k%16)*8,flr(k/16)*8)
+end
+
+-->8
+
+collision_colour = 5
+
+ball = {g_pos=vec2d(64, 64), vel=vec2d(0,0)}
+
+-- normals are in the following format:
+-- key=sspx.to_string()
+-- val=normal_dir (angle ranging 0-1, right=0, increasing counter-clockwise)
+normals = {}
+
+holes = {}
+holes[1] = {gt_ball = vec2d(1,1), gt_cam = vec2d(0,0)}
+holes[2] = {gt_ball = vec2d(19.5,5.5), gt_cam = vec2d(16,0)}
+
+
+function create_normals_for_circle(is_convex, outer_box, inner_box)
+ local centre = outer_box.centre
+
+ local multiplier
+ if (is_convex) multiplier = 1 multiplier= -1
+
+ for y = outer_box.y, outer_box.y + outer_box.h do
+  for x = outer_box.x, outer_box.x + outer_box.w do
+   local ipoint = vec2d(x,y)
+   if not inner_box.contains(ipoint) then
+    if sget(x,y) == collision_colour then
+     local normal = atan2(multiplier*(x-centre.x),multiplier*(y-centre.y))
+     add(normals,normal,ipoint.to_string())
+    end
+   end
+  end
+ end
+end
+
+function create_parallel_normals_for_single_sprite(k, angle)
+ local top_left = k2ss(k)
+ for y = top_left.y, top_left.y + 7 do
+  for x = top_left.x, top_left.x + 7 do
+   local point = vec2d(x,y)
+   add(normals,angle,point.to_string())
+  end
+ end
+end
+
+function create_normals()
+ -- the convex circle
+ local outer_box = box2d(64,0,32,32)
+ local inner_box = box2d(72,8,16,16)
+ --local top_left_outer_box = vec2d(64,0)
+ --local top_left_inner_box = vec2d(72,8)
+ --local bottom_right_inner_box = vec2d(87,23)
+ --local bottom_right_outer_box = vec2d(95,31)
+ create_normals_for_circle(true, outer_box, inner_box)
+
+ -- the concave circle
+ outer_box = box2d(96,0,32,32)
+ inner_box = box2d(104,8,16,16)
+ -- local top_left_outer_box = vec2d(96,0)
+ -- local top_left_inner_box = vec2d(104,8)
+ -- local bottom_right_inner_box = vec2d(119,23)
+ -- local bottom_right_outer_box = vec2d(127,31)
+ create_normals_for_circle(false, outer_box, inner_box)
+
+ create_parallel_normals_for_single_sprite(20,0.125)
+ create_parallel_normals_for_single_sprite(21,0.375)
+ create_parallel_normals_for_single_sprite(22,0.625)
+ create_parallel_normals_for_single_sprite(23,0.875)
+
+ create_parallel_normals_for_single_sprite(36,0)
+ create_parallel_normals_for_single_sprite(37,0.25)
+ create_parallel_normals_for_single_sprite(38,0.5)
+ create_parallel_normals_for_single_sprite(39,0.75)
+
+ create_parallel_normals_for_single_sprite(52,0)
+ create_parallel_normals_for_single_sprite(53,0.25)
+ create_parallel_normals_for_single_sprite(54,0.5)
+ create_parallel_normals_for_single_sprite(55,0.75)
 end
 
 function read_input()
 	local speed = 1
  if btnp(5) then
-  ball.dx = speed*cos(shot_angle)
-  ball.dy = speed*sin(shot_angle)
+  ball.vel.x = speed*cos(shot_angle)
+  ball.vel.y = speed*sin(shot_angle)
   ball_stopped = false
   shot_counter += 1
  elseif btn(0) then
@@ -67,64 +272,86 @@ function read_input()
  end
 end
 
-function init_hole(num)
- ball.x = holes[num].ball_x
- ball.y = holes[num].ball_y
- camera(holes[num].cam_x,holes[num].cam_y)
- ball.dx = 0
- ball.dy = 0
- ball_stopped = true
- -- we can add an offset here. Gets updated rarely, not once per frame
- shot_display.x = holes[num].cam_x + 1
- shot_display.y = holes[num].cam_y + 1
-end
 
-function old_collision(cur_tile, next_tile)
- local delta_tile_x = next_tile.x - cur_tile.x
- local delta_tile_y = next_tile.y - cur_tile.y
+function find_collision_pix(cur_pix, next_pix)
+ if(cur_pix == next_pix) then
+  return cur_pix
+ end
+
+ -- plan: start at cur_ball_pos and iterate pixel by pixel toward next_ball_pos
+ -- When an offending pixel is first touched, that's our collide point
+ -- do we can iterate our line by in(dec)rementing our x or y based on comparing to ratio=(next-cur).y/(next-cur).x
+ -- Once we find collide point, we can ask the sprite (or sprite family) what the normal dir is
+ -- Using the normal, we find the new direction via reflection
+ -- We set this to the ball's new direction (prob no need to account for distance b/w collide point and cur, but it's doable)
+
+ -- cur dir = atan2(next-cur .x, next-cur .y)
+ -- = atan2(ball.dx,ball.dy)
+ -- which is monotonic to ball.dy/ball.dx, except there's a div by zero
+
+ -- This gives an "angle" from [0,1] of our ball
+ local vel_dir = ball.vel.angle() --atan2(ball.vel.x, ball.vel.y)
+
+  --this might be overkill
+ local xdir, ydir
+ if (ball.vel.x == 0) xdir=0 xdir=sgn(ball.vel.x)
+ if (ball.vel.y == 0) ydir=0 ydir=sgn(ball.vel.y)
+
+ -- make a single move
+ local check_pix = cur_pix
+ if abs(ball.dx) > abs(ball.dy) then
+  check_pix.x += xdir
+ else
+  check_pix.y += ydir
+ end
+
  
- if delta_tile_x*delta_tile_y!=0 then
-  -- need to determine what kind of corner we're hitting.
-  next_tile_kx = mget(next_tile.x , cur_tile.y)
-  next_tile_ky = mget(cur_tile.x , next_tile.y)
-  if next_tile_kx == 17 and next_tile_ky == 17 then
-   --it's an inside corner
-   ball.dx *= -1;
-   ball.dy *= -1;
-  elseif next_tile_kx == 17 then
-   --it's a vertical wall
-   ball.dx *= -1;
-  elseif next_tile_ky == 17 then
-   -- it's a horizontal wall
-   ball.dy *= -1;
-  else
-   -- it's an outside corner... just bounce directly back, I guess?
-   ball.dx *= -1;
-   ball.dy *= -1;
+ while true do
+  if (s2colour(check_pix_k, vec2d(check_pix.x%8, check_pix.y%8))!=5) then
+   -- we've collided
   end
- elseif delta_tile_x != 0 then
-   -- it's a vertical wall
-   ball.dx *= -1;
- elseif delta_tile_y != 0 then
-   -- it's a horizontal wall
-   ball.dy *= -1;
+
+  local angle_diff = (next_pix - check_pix).angle() - vel_dir
+  if(angle_diff == 0) then
+
+  elseif angle_diff>0 then
+
+  else
+
+  end
+
+ end
+
+
+ if abs(ball.dx) > abs(ball.dy) then
+  check_pix.x += xdir
+ else
+  check_pix.y += ydir
+ end
+ check_pix_k = mget(check_pix.x/8, check_pix.y/8)
+
+ -- iterate along the path until we find a collision pixel
+ while(s2colour(check_pix_k, vec2d(check_pix.x%8, check_pix.y%8))==5) do
+  local new_dir = abs(next_pix.y-check_pix.y)/abs(next_pix.x-check_pix.x)
+  -- these dirs, when abs, are the slopes. 
+  -- If the new slope is of greater magnitude than the original slope, a y-move will decrease it, and vice versa 
+  move_in_x = new_dir<abs(dir)
+  if (move_in_x) check_pix.x += xdir check_pix.y += ydir
+  check_pix_k = mget(check_pix.x/8, check_pix.y/8)
  end
 end
 
-function get_sprite_colour(sprite_k, local_pixel)
- local row = flr(sprite_k / 16) -- starting at zero
- local column = sprite_k % 16 -- starting at zero
- return sget(local_pixel.x+column*8, local_pixel.y+row*8)
-end
+function collision2(cur_pix, next_pix)
+ local next_pix_local = vec2d(next_pix.x % 8, next_pix.y % 8)
 
-function get_normal_for_pix(check_pix)
+ local coll_pix = find_collision_pix(cur_pix, next_pix)
 
 end
 
 function collision(cur_pos, next_pos)
  -- have to round to see where it actually is
- local next_pix = vec2d:new(flr(next_pos.x*8), flr(next_pos.y*8))
- local next_pix_local = vec2d:new(next_pix.x % 8, next_pix.y % 8)
+ local next_pix = vec2d(flr(next_pos.x*8), flr(next_pos.y*8))
+ local next_pix_local = vec2d(next_pix.x % 8, next_pix.y % 8)
 
  next_pix_col = get_sprite_colour(next_pos.k, next_pix_local)
 
@@ -149,7 +376,7 @@ function collision(cur_pos, next_pos)
  if (ball.dx == 0) xdir=0 xdir=sgn(ball.dx)
  if (ball.dy == 0) ydir=0 ydir=sgn(ball.dy)
 
- local check_pix = vec2d:new(flr(cur_pos.x*8), flr(cur_pos.y*8))
+ local check_pix = vec2d(flr(cur_pos.x*8), flr(cur_pos.y*8))
 
  if abs(ball.dx) > abs(ball.dy) then
   check_pix.x += xdir
@@ -159,7 +386,7 @@ function collision(cur_pos, next_pos)
  check_pix_k = mget(check_pix.x/8, check_pix.y/8)
 
  -- iterate along the path until we find a collision pixel
- while(get_sprite_colour(check_pix_k, vec2d:new(check_pix.x%8, check_pix.y%8))==5) do
+ while(get_sprite_colour(check_pix_k, vec2d(check_pix.x%8, check_pix.y%8))==5) do
   local new_dir = abs(next_pix.y-check_pix.y)/abs(next_pix.x-check_pix.x)
   -- these dirs, when abs, are the slopes. 
   -- If the new slope is of greater magnitude than the original slope, a y-move will decrease it, and vice versa 
@@ -188,8 +415,8 @@ function collision(cur_pos, next_pos)
  local i = last_point+1;
  while(i!=last_point) do
   if(i>8) i-=8
-  i_point = vec2d:new(check_pix.x+eight_dirs_x[i],check_pix.y+eight_dirs_y)
-  if(get_sprite_colour(mget(check_pix.x/8, check_pix.y/8), vec2d:new(check_pix.x%8, check_pix.y%8))!=5) then
+  i_point = vec2d(check_pix.x+eight_dirs_x[i],check_pix.y+eight_dirs_y)
+  if(get_sprite_colour(mget(check_pix.x/8, check_pix.y/8), vec2d(check_pix.x%8, check_pix.y%8))!=5) then
    collision_pix_clock = i
    break
   end
@@ -200,8 +427,8 @@ function collision(cur_pos, next_pos)
  local i = last_point-1;
  while(i!=last_point) do
   if(i<1) i+=8
-  i_point = vec2d:new(check_pix.x+eight_dirs_x[i],check_pix.y+eight_dirs_y)
-  if(get_sprite_colour(mget(check_pix.x/8, check_pix.y/8), vec2d:new(check_pix.x%8, check_pix.y%8))!=5) then
+  i_point = vec2d(check_pix.x+eight_dirs_x[i],check_pix.y+eight_dirs_y)
+  if(get_sprite_colour(mget(check_pix.x/8, check_pix.y/8), vec2d(check_pix.x%8, check_pix.y%8))!=5) then
    collision_pix_counter_clock = i
    break
   end
@@ -211,8 +438,20 @@ function collision(cur_pos, next_pos)
  local diff_clockwise = last_point - collision_pix_clock
  local diff_counterclockwise = last_point - collision_pix_counter_clock
 
- --local cur_pixel_local = vec2d:new(cur_ball_pos.x % 8, cur_ball_pos.y % 8)
+ --local cur_pixel_local = vec2d(cur_ball_pos.x % 8, cur_ball_pos.y % 8)
 
+end
+
+function init_hole(num)
+ ball.pos.x = holes[num].ball_x
+ ball.y = holes[num].ball_y
+ camera(holes[num].cam_x,holes[num].cam_y)
+ ball.dx = 0
+ ball.dy = 0
+ ball_stopped = true
+ -- we can add an offset here. Gets updated rarely, not once per frame
+ shot_display.x = holes[num].cam_x + 1
+ shot_display.y = holes[num].cam_y + 1
 end
 
 function ball_update()
@@ -263,6 +502,7 @@ function ball_update()
 end
 
 function _init()
+
  init_hole(1)
 end
 
@@ -317,22 +557,16 @@ function draw_ball()
 end
 
 function draw_arrow()
- --local arrow = {x=0,y=0, colour = 7}
- --arrow.x = ball.x + 0.5 + cos(shot_angle)
- --arrow.y = ball.y + 0.5 + sin(shot_angle)
- --line(8*(arrow.x + cos(shot_angle)), 8*(arrow.y + sin(shot_angle)), 8*arrow.x, 8*arrow.y, arrow.colour)
- --circ(8*(arrow.x + cos(shot_angle)/3), 8*(arrow.y + sin(shot_angle)/3), 2, arrow.colour)
-
  local colour = 7
 
  -- create a prototype arrow, facing right (angle=0), and rotate it
 
  --hole1 has ball.x=ball.y=8
- local centre = vec2d:new(ball.x + 4, ball.y + 4)
- local tip = vec2d:new(centre.x-8, centre.y):rotate(shot_angle,centre)
- local tail = vec2d:new(centre.x-16, centre.y):rotate(shot_angle,centre)  
- local lpoint = vec2d:new(centre.x-12, centre.y+2):rotate(shot_angle,centre)
- local rpoint = vec2d:new(centre.x-12, centre.y-2):rotate(shot_angle,centre)   
+ local centre = vec2d(ball.x + 4, ball.y + 4)
+ local tip = vec2d(centre.x-8, centre.y):rotate(shot_angle,centre)
+ local tail = vec2d(centre.x-16, centre.y):rotate(shot_angle,centre)  
+ local lpoint = vec2d(centre.x-12, centre.y+2):rotate(shot_angle,centre)
+ local rpoint = vec2d(centre.x-12, centre.y-2):rotate(shot_angle,centre)   
 
  -- draw the arrow
 
@@ -347,7 +581,7 @@ function draw_arrow()
 end
 
 function draw_display()
- rectfill(holes[hole_num].cam_x, holes[hole_num].cam_y, holes[hole_num].cam_x + 8*16, holes[hole_num].cam_y + 8*2, 5)
+ rectfill(0, 0, 8*16, 8*2, 5)
  if win then
   print("winner!", holes[hole_num].cam_x + 8*8, holes[hole_num].cam_y+1, 7)
  end
