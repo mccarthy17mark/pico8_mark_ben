@@ -137,9 +137,12 @@ g_camera = vec2d(0,0)
 -- everything with a 't' in it is a location in units of tiles
 
 function s2ss(sprite_k, s)
- local row = flr(sprite_k / 16) -- starting at zero
- local column = sprite_k % 16 -- starting at zero
- return vec2d(s.x+column*8, s.y+row*8)
+ -- local row = flr(sprite_k / 16) -- starting at zero
+ -- local column = sprite_k % 16 -- starting at zero
+ -- return vec2d(s.x+column*8, s.y+row*8)
+
+ -- this is marginally more optimized compared to above
+ return vec2d(s.x+(sprite_k%16)*8,s.y+(flr(sprite_k / 16))*8)
 end
 
 function s2colour(sprite_k, s)
@@ -164,11 +167,21 @@ function gt2k(gt)
 end
 
 function g2k(g)
- return gt2k(g2gt(g))
+ return mget(flr(g.x/8),flr(g.y/8)) --same as gt2k(g2gt(g)) but fewer calls
 end
 
 function k2ss(k)
  return vec2d((k%16)*8,flr(k/16)*8)
+end
+
+function g2s(g)
+ return vec2d(g.x%8,g.y%8)
+end
+
+function g2ss(g)
+ local k = g2k(g)
+ local s = g2s(g)
+ return s2ss(k,s)
 end
 
 -->8
@@ -186,6 +199,7 @@ holes = {}
 holes[1] = {gt_ball = vec2d(1,1), gt_cam = vec2d(0,0)}
 holes[2] = {gt_ball = vec2d(19.5,5.5), gt_cam = vec2d(16,0)}
 
+friction = 1 --todo check what's reasonable, let it be tile dependent (make a friction_k table)
 
 function create_normals_for_circle(is_convex, outer_box, inner_box)
  local centre = outer_box.centre
@@ -272,10 +286,16 @@ function read_input()
  end
 end
 
+function handle_tile_collision(k)
+ if k == 18 then
+  --we got it in a hole
+ end
+ return
+end
 
 function find_collision_pix(cur_pix, next_pix)
  if(cur_pix == next_pix) then
-  return cur_pix
+  return false, cur_pix
  end
 
  -- plan: start at cur_ball_pos and iterate pixel by pixel toward next_ball_pos
@@ -297,54 +317,80 @@ function find_collision_pix(cur_pix, next_pix)
  if (ball.vel.x == 0) xdir=0 xdir=sgn(ball.vel.x)
  if (ball.vel.y == 0) ydir=0 ydir=sgn(ball.vel.y)
 
- -- make a single move
+ -- make a single pixel move
  local check_pix = cur_pix
+ --local last_check_pix = cur_pix
  if abs(ball.dx) > abs(ball.dy) then
   check_pix.x += xdir
  else
   check_pix.y += ydir
  end
 
- 
+ -- this is a debug variable
+ local i=0
+
  while true do
-  if (s2colour(check_pix_k, vec2d(check_pix.x%8, check_pix.y%8))!=5) then
+  local k = g2k(check_pix)
+  handle_tile_collision(k)
+
+  -- check if the next pix is a collision space?
+  normal_vec = normals[g2ss(check_pix).to_string()]
+  if (normal_vec != nil) then
    -- we've collided
+   ball.vel.reflect(normal_vec)
+   return true, check_pix
   end
 
-  local angle_diff = (next_pix - check_pix).angle() - vel_dir
-  if(angle_diff == 0) then
-
-  elseif angle_diff>0 then
-
+  -- make next move, only in the 4 cardinal directions, no diagonals
+  -- compare the direction of the new vec to the original vec
+  -- if the new vector is in more of a y direction, we want to move in the y direction which will bring it closer to the original vec
+  -- we want to evaluate abs(cos(new_dir.angle)) > abs(cos(vel_dir.angle))
+  -- but that's a lot of math. can just do abs(new_dir.y/new_dir.x) < abs(vel_dir.y/vel_dir.x)
+  -- except then we divide by zero a bunch... we need to handle the .x=0 case, which is probably not worth it.
+  local new_dir = next_pix - check_pix
+  if abs(cos(new_dir.angle)) > abs(cos(vel_dir.angle)) then
+   check_pix.x += xdir
   else
-
+   check_pix.y += ydir
+  end
+  --check_pix_k = mget(check_pix.x/8, check_pix.y/8)
+  if check_pix == next_pix then
+   return false, check_pix
   end
 
  end
 
-
- if abs(ball.dx) > abs(ball.dy) then
-  check_pix.x += xdir
+ if i>100 then
+  assert(1==0,"check_pix="..check_pix.to_string()..", next_pix="..next_pix.to_string())
  else
-  check_pix.y += ydir
+  i+=1
  end
- check_pix_k = mget(check_pix.x/8, check_pix.y/8)
 
- -- iterate along the path until we find a collision pixel
- while(s2colour(check_pix_k, vec2d(check_pix.x%8, check_pix.y%8))==5) do
-  local new_dir = abs(next_pix.y-check_pix.y)/abs(next_pix.x-check_pix.x)
-  -- these dirs, when abs, are the slopes. 
-  -- If the new slope is of greater magnitude than the original slope, a y-move will decrease it, and vice versa 
-  move_in_x = new_dir<abs(dir)
-  if (move_in_x) check_pix.x += xdir check_pix.y += ydir
-  check_pix_k = mget(check_pix.x/8, check_pix.y/8)
- end
 end
 
-function collision2(cur_pix, next_pix)
- local next_pix_local = vec2d(next_pix.x % 8, next_pix.y % 8)
+function handle_collisions(cur_pix, next_pix)
+ --local next_pix_local = vec2d(next_pix.x % 8, next_pix.y % 8)
 
- local coll_pix = find_collision_pix(cur_pix, next_pix)
+ local collided, coll_pix = find_collision_pix(cur_pix, next_pix)
+
+ --if not collided, ignore coll_pix
+ if not collided then
+  return
+ end
+
+ -- apply friction
+ local dist = (coll_pix - cur_pix).magnitude
+ local vel_mag_1 = ball.vel.magnitude
+ local interim_val = vel_mag_1^2 - 2*friction*dist
+ -- will this ever happen? shouldn't next_pix being farther than cur_pix guarantee our updated vel > 0 ? 
+ if interim_val < 0 then 
+  ball_stopped = true
+  ball.vel = {x=0, y=0}
+  ball.pos = coll_pix
+ else
+  local vel_mag_2 = sqrt(interim_val)
+  ball.vel *= vel_mag_2 / vel_mag_1
+ end 
 
 end
 
@@ -454,8 +500,41 @@ function init_hole(num)
  shot_display.y = holes[num].cam_y + 1
 end
 
+function update_ball_physics()
+ -- apply movement
+ ball.x += ball.vel.x
+ ball.y += ball.vel.y
+ -- apply friction
+ -- each frame is supposedly constant time, we'll ignore dropped frames for now.
+ -- friction is independent of speed, it's constant decelleration
+ local vel_mag_1 = ball.vel.magnitude
+ local vel_mag_2 = vel_mag_1 - friction
+ if vel_mag_2 < 0 then 
+  ball_stopped = true
+  ball.vel = {x=0, y=0}
+ else
+  ball.vel *= vel_mag_2 / vel_mag_1
+ end
+end
+
 function ball_update()
- local cur_pos = {x=ball.x+0.5, y=ball.y+0.5}
+ --ball = {g_pos=vec2d(64, 64), vel=vec2d(0,0)}
+
+ local cur_pos = ball.g_pos
+ cur_pos.k = mget(cur_pos.x, cur_pos.y)
+
+ local next_pos = ball.g_pos + ball.vel
+ next_pos.k = mget(next_pos.x, next_pos.y)
+
+ handle_collisions(cur_pos, next_pos)
+
+ update_ball_physics()
+
+
+end
+
+function old_ball_update()
+ local cur_pos = {x=ball.x + 0.5, y=ball.y + 0.5}
  cur_pos.k = mget(cur_pos.x, cur_pos.y)
  local next_pos = {x=ball.x+ball.dx, y=ball.y+ball.dy}
  next_pos.k = mget(next_pos.x, next_pos.y)
