@@ -3,9 +3,11 @@ version 42
 __lua__
 -- spoopy (aka fun-scary) minigolf
 
---Class def'ns here
+printh("spoopy_golf initialized", "log.txt", true)
 
---Note to self: Screen is 16*16 tiles... 128*128 px
+--class def'ns here
+
+--note to self: screen is 16*16 tiles... 128*128 px
 -- tiles are 8px*8px
 -- the various draw shape functions (circ(),line()) are in terms of global map pixels (g)
 -- for angles, 0 is right, 0.25 is up, sin is actually -sin: down is pos up is neg
@@ -22,7 +24,11 @@ function vec2d.new(x,y)
 end
 
 -- this makes vec2d(1,2) the same as vec2d.new(1,2)
-setmetatable(vec2d, {__call = vec2d.new})
+setmetatable(vec2d, {
+ __call = function(cls, ...)
+  return cls.new(...) -- Calls vec2d:new(...)
+ end
+})
 
 -- add two vectors
 function vec2d.__add(a,b)
@@ -44,7 +50,7 @@ function vec2d.__div(a,b)
  return vec2d(a.x / b, a.y / b)
 end
 
--- Check if two vectors are equal
+-- check if two vectors are equal
 function vec2d.__eq(a,b)
  return (a.x == b.x and a.y == b.y)
 end
@@ -56,7 +62,7 @@ end
 
 function vec2d:rotate(angle, pivot)
  -- angle is scalar, pivot is vec2d
- -- functions like this ought to not modify the original vector. If you want it modified, do:
+ -- functions like this ought to not modify the original vector. if you want it modified, do:
   -- vec = vec.rotate(angle,pivot)
  local temp = self - pivot
  local new_vec = vec2d(0,0)
@@ -82,6 +88,10 @@ function vec2d:magnitude()
  return sqrt(self.x^2 + self.y^2)
 end
 
+function vec2d:dot(other)
+ return self.x*other.x + self.y*other.y
+end
+
 function vec2d:normalized()
  local mag = self:magnitude()
  if mag == 0 then
@@ -95,15 +105,18 @@ function vec2d:angle()
 end
 
 function vec2d:reflect(normal)
- -- 
- local angle_diff = normal:angle() - self:angle()
- if angle_diff < -0.5 then
-  angle_diff += 1
- elseif angle_diff >0.5 then
-  angle_diff -= 1
- end
+ printh("trace: entering vec2d:reflect with self=" .. self:to_string() .. " and normal=" .. normal:to_string(), "log.txt")
+ -- r = d-2(d.n)n where d is the incoming vector (self) and n is the normal vector (normal)
+ return self - normal * 2 * self:dot(normal) 
+ 
+ -- local angle_diff = normal:angle() - self:angle()
+ -- if angle_diff < -0.5 then
+ --  angle_diff += 1
+ -- elseif angle_diff >0.5 then
+ --  angle_diff -= 1
+ -- end
 
- return self:rotate(2*angle_diff, vec2d(0,0))
+ -- return self:rotate(2*angle_diff, vec2d(0,0))
 end
 
 box2d = {}
@@ -118,7 +131,12 @@ function box2d.new(x,y,w,h)
  return self
 end
 
-setmetatable(box2d, {__call = box2d.new})
+-- this is supposed to make box2d(1,2,3,4) the same as box2d.new(1,2,3,4)
+setmetatable(box2d, {
+ __call = function(cls, ...)
+  return cls.new(...) -- Calls box2d:new(...)
+ end
+})
 
 function box2d:contains(point)
  -- the edges of the box are (not?) included in the box
@@ -133,9 +151,9 @@ function box2d:centre()
 end
 
 -->8
--- Utility functions here
+-- utility functions here
 
--- The location of the camera, in pixels, relative to the global map
+-- the location of the camera, in pixels, relative to the global map
 g_camera = vec2d(0,0)
 
 -- s is a pixel location relative to a sprite
@@ -175,6 +193,10 @@ function gt2k(gt)
  return mget(gt.x, gt.y)
 end
 
+function gt2g(gt)
+ return gt*8
+end
+
 function g2k(g)
  return mget(flr(g.x/8),flr(g.y/8)) --same as gt2k(g2gt(g)) but fewer calls
 end
@@ -197,7 +219,7 @@ end
 
 collision_colour = 5
 
-ball = {g_pos=vec2d(64, 64), vel=vec2d(0,0)}
+ball = {g_pos=vec2d(64, 64), vel=vec2d(0,0), k=48, k_i = 0}
 
 -- normals are in the following format:
 -- key=sspx.to_string()
@@ -208,15 +230,20 @@ holes = {}
 holes[1] = {gt_ball = vec2d(1,1), gt_cam = vec2d(0,0)}
 holes[2] = {gt_ball = vec2d(19.5,5.5), gt_cam = vec2d(16,0)}
 
-friction = 1 --todo check what's reasonable, let it be tile dependent (make a friction_k table)
-
+friction = 0.1 --todo check what's reasonable, let it be tile dependent (make a friction_k table)
+speed_multiplier_on_reflection = 0.75
+shot_speed = 3
 hole_num = 1
 
 win = false
 
 shot_display = {x=1, y=1, text = "stroke no: "}
 
+shot_angle = 0
+shot_counter = 0
+
 function compute_normals_for_circle(is_convex, outer_box, inner_box)
+ printh("trace: entering compute_normals_for_circle", "log.txt")
  local centre = outer_box:centre()
 
  local multiplier
@@ -227,8 +254,11 @@ function compute_normals_for_circle(is_convex, outer_box, inner_box)
    local ipoint = vec2d(x,y)
    if not inner_box:contains(ipoint) then
     if sget(x,y) == collision_colour then
-     local normal = atan2(multiplier*(x-centre.x),multiplier*(y-centre.y))
-     add(normals,normal,ipoint:to_string())
+     local normal_angle = atan2(multiplier*(x-centre.x),multiplier*(y-centre.y))
+     --printh("ipoint = " .. ipoint:to_string(), "log.txt")
+     normals[ipoint:to_string()] = normal_angle
+     -- add only works for arrays with numerical indices
+     --add(normals,normal,ipoint:to_string())
     end
    end
   end
@@ -240,12 +270,13 @@ function compute_parallel_normals_for_single_sprite(k, angle)
  for y = top_left.y, top_left.y + 7 do
   for x = top_left.x, top_left.x + 7 do
    local point = vec2d(x,y)
-   add(normals,angle,point:to_string())
+   normals[point:to_string()] = angle
   end
  end
 end
 
 function compute_normals()
+ printh("entering compute_normals", "log.txt")
  -- the convex circle
  local outer_box = box2d(64,0,32,32)
  local inner_box = box2d(72,8,16,16)
@@ -253,6 +284,7 @@ function compute_normals()
  --local top_left_inner_box = vec2d(72,8)
  --local bottom_right_inner_box = vec2d(87,23)
  --local bottom_right_outer_box = vec2d(95,31)
+ 
  compute_normals_for_circle(true, outer_box, inner_box)
 
  -- the concave circle
@@ -281,10 +313,9 @@ function compute_normals()
 end
 
 function read_input()
-	local speed = 1
  if btnp(5) then
-  ball.vel.x = speed*cos(shot_angle)
-  ball.vel.y = speed*sin(shot_angle)
+  ball.vel.x = shot_speed*cos(shot_angle)
+  ball.vel.y = shot_speed*sin(shot_angle)
   ball_stopped = false
   shot_counter += 1
  elseif btn(0) then
@@ -303,103 +334,119 @@ end
 
 -- detection: finds the first collision along the path (pixel or tile-based).
 -- returns nil if no collision, or {type="wall"|"hole", pix=vec2d, normal=vec2d} (normal only for walls).
+
+-- we should update this to account for the fact that the ball has a radius.
+-- maybe there is a version of bresenham that gives a thickness to the line.
+-- the answer is to do bresenham for all 4 corners of the ball sprite, since it's always a square, and then take the earliest collision among all 4 lines.
+-- this seems like a lot of work.
 function detect_collision(cur_pix, next_pix)
-  if cur_pix == next_pix then
-    return nil
+ printh("trace: entering detect_collision", "log.txt")
+ if cur_pix == next_pix then
+  return nil
+ end
+
+ local start = vec2d(flr(cur_pix.x), flr(cur_pix.y))
+ local target = vec2d(flr(next_pix.x), flr(next_pix.y))
+ local last_pix = start
+ local dx = abs(target.x - start.x)
+ local dy = abs(target.y - start.y)
+ local sx = sgn(target.x - start.x)
+ local sy = sgn(target.y - start.y)
+ local err = dx - dy
+
+ local check_pix = vec2d(start.x, start.y)
+
+ while check_pix ~= target do
+  -- move to next pixel along bresenham path
+  if dx == 0 then
+   check_pix.y += sy
+  elseif dy == 0 then
+   check_pix.x += sx
+  else
+   local e2 = err * 2
+   if e2 > -dy then
+    err -= dy
+    check_pix.x += sx
+   else
+    err += dx
+    check_pix.y += sy
+   end
   end
 
-  local start = vec2d(flr(cur_pix.x), flr(cur_pix.y))
-  local target = vec2d(flr(next_pix.x), flr(next_pix.y))
-  local dx = abs(target.x - start.x)
-  local dy = abs(target.y - start.y)
-  local sx = sgn(target.x - start.x)
-  local sy = sgn(target.y - start.y)
-  local err = dx - dy
+  -- check for pixel-based collision (walls/obstacles with normals)
+  local normal_angle = normals[g2ss(check_pix):to_string()]
+  if normal_angle then
+   local normal_vec = vec2d(cos(normal_angle), sin(normal_angle))  -- convert angle to vector
+   printh("trace: collision detected at " .. check_pix:to_string() .. " with last safe pixel: " .. last_pix:to_string() .. " and normal: " .. normal_vec:to_string(), "log.txt")
+   -- pix isn't consumed, can probably remove.
+   return {type="wall", pix=check_pix, last_pix=last_pix, normal=normal_vec}
+  end
+  -- if other pixel-based obstacles are added, check for them here
 
-  local check_pix = vec2d(start.x, start.y)
-
-  while check_pix ~= target do
-    -- move to next pixel along bresenham path
-    if dx == 0 then
-      check_pix.y += sy
-    elseif dy == 0 then
-      check_pix.x += sx
-    else
-      local e2 = err * 2
-      if e2 > -dy then
-        err -= dy
-        check_pix.x += sx
-      else
-        err += dx
-        check_pix.y += sy
-      end
-    end
-
-    -- check for pixel-based collision (walls/obstacles with normals)
-    local normal_angle = normals[g2ss(check_pix):to_string()]
-    if normal_angle then
-      local normal_vec = vec2d(cos(normal_angle), sin(normal_angle))  -- convert angle to vector
-      return {type="wall", pix=check_pix, normal=normal_vec}
-    end
-    -- if other pixel-based obstacles are added, check for them here
-
-    -- check for tile-based collision (holes)
-    local tile = g2k(check_pix)
-    if tile == 18 then
-      return {type="hole", pix=check_pix}
-    end
-
-    -- Add more checks here for other tile-based obstacles 
+  -- check for tile-based collision (holes)
+  local tile = g2k(check_pix)
+  if tile == 18 then
+   printh("trace: collision detected with hole at: " .. check_pix:to_string(), "log.txt")
+   return {type="hole", pix=check_pix}
   end
 
-  return nil  -- No collision found
+  -- add more checks here for other tile-based obstacles 
+
+  -- if we get here, no colision occurred, so record this as the last non-collision pixel and keep checking
+  last_pix = check_pix
+ 
+ end
+
+ return nil  -- no collision found
 end
 
 function compute_final_position(cur_pix, move_vec)
-  local current = cur_pix
-  local remaining = move_vec
+ local current = cur_pix
+ local remaining = move_vec
 
-  while true do
-    if remaining == vec2d(0,0) then
-      return current
-    end
-
-    local next_pix = current + remaining
-    local collision = detect_collision(current, next_pix)
-    if not collision then
-      return next_pix
-    end
-
-    if collision.type == "hole" then
-      ball_stopped = true
-      ball.vel = vec2d(0, 0)
-      return collision.pix
-    elseif collision.type == "wall" then
-      local travelled = (collision.pix - current).magnitude
-      local remaining_dist = remaining:magnitude() - travelled
-      ball.vel = ball.vel:reflect(collision.normal)
-      if remaining_dist <= 0 then
-        return collision.pix
-      end
-      remaining = ball.vel:normalized() * remaining_dist
-      current = collision.pix
-    else
-      -- handle other collision types if added
-      return current  -- default to stopping at current position on unknown collision
-    end
+ while true do
+  if remaining == vec2d(0,0) then
+   return current
   end
+
+  local next_pix = current + remaining
+  local collision = detect_collision(current, next_pix)
+  if not collision then
+   return next_pix
+  end
+
+  if collision.type == "hole" then
+   ball_stopped = true
+   ball.vel = vec2d(0, 0)
+   return collision.pix
+  elseif collision.type == "wall" then
+   local travelled = (collision.last_pix - current):magnitude()
+   local remaining_dist = (remaining:magnitude() - travelled) * speed_multiplier_on_reflection
+   printh("trace: ball.vel before reflection: " .. ball.vel:to_string(), "log.txt")
+   printh("trace: collision normal: " .. collision.normal:to_string(), "log.txt")
+   ball.vel = ball.vel:reflect(collision.normal)
+   printh("trace: ball.vel after reflection: " .. ball.vel:to_string(), "log.txt")
+   if remaining_dist <= 0 then
+    return collision.last_pix
+   end
+   remaining = ball.vel:normalized() * remaining_dist
+   current = collision.last_pix
+  else
+   -- handle other collision types if added
+   return current  -- default to stopping at current position on unknown collision
+  end
+ end
 end
 
 function init_hole(num)
- ball.pos.x = holes[num].ball_x
- ball.y = holes[num].ball_y
- camera(holes[num].cam_x,holes[num].cam_y)
- ball.dx = 0
- ball.dy = 0
+ printh("trace: entering init_hole(" .. num .. ")", "log.txt")
+ ball.pos = gt2g(holes[num].gt_ball) -- convert from tile to global pixel coords
+ camera(holes[num].gt_cam.x,holes[num].gt_cam.y)
+ ball.vel = vec2d(0, 0)
  ball_stopped = true
- -- we can add an offset here. Gets updated rarely, not once per frame
- shot_display.x = holes[num].cam_x + 1
- shot_display.y = holes[num].cam_y + 1
+ -- we can add an offset here. gets updated rarely, not once per frame
+ shot_display.x = holes[num].gt_cam.x + 1
+ shot_display.y = holes[num].gt_cam.y + 1
 end
 
 function update_ball_physics()
@@ -410,6 +457,7 @@ function update_ball_physics()
   return
  end
 
+ -- friction is constant force, so constant deceleration, so just a speed subtraction.
  local new_speed = speed - friction
  if new_speed <= 0 then
   ball_stopped = true
@@ -423,8 +471,6 @@ function ball_update()
  local cur_pos = ball.g_pos
  local final_pos = compute_final_position(cur_pos, ball.vel)
  ball.g_pos = final_pos
- ball.x = final_pos.x
- ball.y = final_pos.y
 
  if not ball_stopped then
   update_ball_physics()
@@ -432,11 +478,13 @@ function ball_update()
 end
 
 function _init()
+ printh("trace: entering _init", "log.txt")
  compute_normals()
  init_hole(1)
 end
 
 function _update()
+ printh("trace: entering _update", "log.txt")
  if not win then
   read_input()
  end
@@ -483,8 +531,8 @@ function draw_ball()
    end
   end
  end
- 
- spr(ball.k,ball.x,ball.y)
+ printh("trace: drawing ball at " .. ball.g_pos:to_string() .. " with sprite " .. ball.k, "log.txt")
+ spr(ball.k,ball.g_pos.x,ball.g_pos.y)
 end
 
 function draw_arrow()
@@ -492,8 +540,7 @@ function draw_arrow()
 
  -- create a prototype arrow, facing right (angle=0), and rotate it
 
- --hole1 has ball.x=ball.y=8
- local centre = vec2d(ball.x + 4, ball.y + 4)
+ local centre = vec2d(ball.g_pos.x + 4, ball.g_pos.y + 4)
  local tip = vec2d(centre.x-8, centre.y):rotate(shot_angle,centre)
  local tail = vec2d(centre.x-16, centre.y):rotate(shot_angle,centre)  
  local lpoint = vec2d(centre.x-12, centre.y+2):rotate(shot_angle,centre)
@@ -514,12 +561,13 @@ end
 function draw_display()
  rectfill(0, 0, 8*16, 8*2, 5)
  if win then
-  print("winner!", holes[hole_num].cam_x + 8*8, holes[hole_num].cam_y+1, 7)
+  print("winner!", holes[hole_num].gt_cam.x + 8*8, holes[hole_num].gt_cam.y+1, 7)
  end
  print(shot_display.text .. shot_counter, shot_display.x, shot_display.y, 7)
 end
 
 function _draw()
+ printh("trace: entering _draw", "log.txt")
  cls()
  map()
  if not win then
