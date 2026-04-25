@@ -228,7 +228,7 @@ normals = {}
 
 holes = {}
 holes[1] = {gt_ball = vec2d(1,1), gt_cam = vec2d(0,0)}
-holes[2] = {gt_ball = vec2d(19.5,5.5), gt_cam = vec2d(16,0)}
+holes[2] = {gt_ball = vec2d(19,5), gt_cam = vec2d(16,0)}
 
 friction = 0.1 --todo check what's reasonable, let it be tile dependent (make a friction_k table)
 speed_multiplier_on_reflection = 0.75
@@ -332,19 +332,59 @@ function read_input()
  end
 end
 
--- detection: finds the first collision along the path (pixel or tile-based).
--- returns nil if no collision, or {type="wall"|"hole", pix=vec2d, normal=vec2d} (normal only for walls).
+function get_pixels_of_sprite(sprite_gpos)
+ -- assume (g_x,g_y) is the top-left corner of the sprite in global pixel coordinates
+ -- returns a list of all global pixel coordinates covered by the sprite
+ -- we can extend this later to include non-8x8 square sprites
+ local pixels = {}
+ for j=0,7 do
+  for i=0,7 do
+   add(pixels,vec2d(sprite_gpos.x+i,sprite_gpos.y+j))
+  end
+ end
+ return pixels
+end
 
--- we should update this to account for the fact that the ball has a radius.
--- maybe there is a version of bresenham that gives a thickness to the line.
--- the answer is to do bresenham for all 4 corners of the ball sprite, since it's always a square, and then take the earliest collision among all 4 lines.
--- this seems like a lot of work.
-function detect_collision(cur_pix, next_pix)
- printh("trace: entering detect_collision", "log.txt")
+function ball_wall_collision_check(test_ball_g_pos)
+ -- returns wall collision type or nil
+ local ball_pixels = get_pixels_of_sprite(test_ball_g_pos)
+ for _,pix in pairs(ball_pixels) do
+  local normal_angle = normals[g2ss(pix):to_string()]
+  if normal_angle then
+   local normal_vec = vec2d(cos(normal_angle), sin(normal_angle))  -- convert angle to vector
+   -- not sure if pix is needed anymore, it represents first checked pixel that overlapped
+   return {type="wall", pix=pix, normal=normal_vec}
+  end
+ end
+ return nil
+end
+
+function collision_check_at_position(test_ball_g_pos)
+ -- returns collision type or nil
+ local test_ball_g_pos_centre = test_ball_g_pos + vec2d(4,4)
+ local tile = g2k(test_ball_g_pos_centre)
+ if tile == 18 then
+  return {type="hole", pix=test_ball_g_pos_centre}
+ end
+
+ local wall_collision = ball_wall_collision_check(test_ball_g_pos)
+ if wall_collision then
+  return wall_collision
+ end
+
+ -- add more collision checks here as needed
+
+ return nil
+end
+
+function collision_check_over_path(cur_pix, next_pix)
+
+ -- leave function early if the ball isn't moving
  if cur_pix == next_pix then
   return nil
  end
 
+ -- perform bresenham's line algorithm, iteratively checking for collisions at eatch pixel along the way
  local start = vec2d(flr(cur_pix.x), flr(cur_pix.y))
  local target = vec2d(flr(next_pix.x), flr(next_pix.y))
  local last_pix = start
@@ -373,68 +413,102 @@ function detect_collision(cur_pix, next_pix)
    end
   end
 
-  -- check for pixel-based collision (walls/obstacles with normals)
-  local normal_angle = normals[g2ss(check_pix):to_string()]
-  if normal_angle then
-   local normal_vec = vec2d(cos(normal_angle), sin(normal_angle))  -- convert angle to vector
-   printh("trace: collision detected at " .. check_pix:to_string() .. " with last safe pixel: " .. last_pix:to_string() .. " and normal: " .. normal_vec:to_string(), "log.txt")
-   -- pix isn't consumed, can probably remove.
-   return {type="wall", pix=check_pix, last_pix=last_pix, normal=normal_vec}
+  local collision = collision_check_at_position(check_pix)
+  if collision then
+   return collision
   end
-  -- if other pixel-based obstacles are added, check for them here
-
-  -- check for tile-based collision (holes)
-  local tile = g2k(check_pix)
-  if tile == 18 then
-   printh("trace: collision detected with hole at: " .. check_pix:to_string(), "log.txt")
-   return {type="hole", pix=check_pix}
-  end
-
-  -- add more checks here for other tile-based obstacles 
-
-  -- if we get here, no colision occurred, so record this as the last non-collision pixel and keep checking
-  last_pix = check_pix
- 
  end
 
- return nil  -- no collision found
+ return collision_check_at_position(check_pix)  -- check for collision at the final target pixel as well
 end
 
-function compute_final_position(cur_pix, move_vec)
+function handle_ball_movement(cur_pix, move_vec)
+ -- move ball along move_vec from cur_pix, handling collisions along the way
+ -- return the ball's final position and any movement-ending collision info
  local current = cur_pix
  local remaining = move_vec
 
  while true do
+  -- if the ball ran out of velocity, stop and return
   if remaining == vec2d(0,0) then
-   return current
+   return {collision_info=nil, final_pos=current}
   end
 
   local next_pix = current + remaining
-  local collision = detect_collision(current, next_pix)
+  local collision = collision_check_over_path(next_pix)
+  -- if there was no collision, move the ball to the target and return
   if not collision then
-   return next_pix
+   return {collision_info=nil, final_pos=next_pix}
   end
 
+  -- if we got here, a collision occurred and we should handle it
+  -- if the ball hit the hole, immediately stop and return the hole change to be handled by the caller
   if collision.type == "hole" then
    ball_stopped = true
    ball.vel = vec2d(0, 0)
-   return collision.pix
+   return {collision_info=collision, final_pos=collision.pix}
+
+  -- if the ball hit a wall, reflect the remaining movement vector across the wall normal, and continue the loop to check for more collisions along the new path
   elseif collision.type == "wall" then
+   -- last_pix should always be a safe pixel to place the ball on after the collision, since it's the last non-colliding pixel along the path.
    local travelled = (collision.last_pix - current):magnitude()
    local remaining_dist = (remaining:magnitude() - travelled) * speed_multiplier_on_reflection
+   -- this should almost never happen, only if a high speed_multiplier_on_reflection leads to rounding down to zero
+   if remaining_dist <= 0 then
+    return {collision_info=collision, final_pos=collision.last_pix}
+   end
    printh("trace: ball.vel before reflection: " .. ball.vel:to_string(), "log.txt")
    printh("trace: collision normal: " .. collision.normal:to_string(), "log.txt")
    ball.vel = ball.vel:reflect(collision.normal)
    printh("trace: ball.vel after reflection: " .. ball.vel:to_string(), "log.txt")
-   if remaining_dist <= 0 then
-    return collision.last_pix
-   end
    remaining = ball.vel:normalized() * remaining_dist
    current = collision.last_pix
+
+  -- add more collision types here as needed
   else
-   -- handle other collision types if added
-   return current  -- default to stopping at current position on unknown collision
+   assert(false, "unknown collision type: " .. collision.type)
   end
+ end
+end
+
+function update_ball_physics()
+ -- apply friction only; movement is resolved before this
+ local speed = ball.vel:magnitude()
+
+ -- this check might be pointless, we really shouldn't be here if speed<=0
+ if speed <= 0 then
+  ball_stopped = true
+  return
+ end
+
+ -- friction is constant force, so constant deceleration, so just a speed subtraction.
+ local new_speed = speed - friction
+ if new_speed <= 0 then
+  ball_stopped = true
+  ball.vel = vec2d(0, 0)
+ else
+  ball.vel = ball.vel * (new_speed / speed)
+  -- the safest thing to do is check here if ball.vel.speed <= 0, but that's probably overkill
+ end
+end
+
+function ball_update()
+ local cur_pos = ball.g_pos
+ local collision_info, final_pos = handle_ball_movement(cur_pos, ball.vel)
+ ball.g_pos = final_pos
+
+ if collision_info and collision_info.type == "hole" then
+  hole_num += 1
+  if hole_num > #holes then
+   win = true
+   return
+  end
+  init_hole(hole_num)
+  return
+ end
+
+ if not ball_stopped then
+  update_ball_physics()
  end
 end
 
@@ -447,34 +521,6 @@ function init_hole(num)
  -- we can add an offset here. gets updated rarely, not once per frame
  shot_display.x = holes[num].gt_cam.x + 1
  shot_display.y = holes[num].gt_cam.y + 1
-end
-
-function update_ball_physics()
- -- apply friction only; movement is resolved before this
- local speed = ball.vel:magnitude()
- if speed == 0 then
-  ball_stopped = true
-  return
- end
-
- -- friction is constant force, so constant deceleration, so just a speed subtraction.
- local new_speed = speed - friction
- if new_speed <= 0 then
-  ball_stopped = true
-  ball.vel = vec2d(0, 0)
- else
-  ball.vel = ball.vel * (new_speed / speed)
- end
-end
-
-function ball_update()
- local cur_pos = ball.g_pos
- local final_pos = compute_final_position(cur_pos, ball.vel)
- ball.g_pos = final_pos
-
- if not ball_stopped then
-  update_ball_physics()
- end
 end
 
 function _init()
