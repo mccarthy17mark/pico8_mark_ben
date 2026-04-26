@@ -2,8 +2,30 @@ pico-8 cartridge // http://www.pico-8.com
 version 42
 __lua__
 -- spoopy (aka fun-scary) minigolf
+logfile = "log.txt"
+printh("~~~~~spoopy_golf initialized~~~~~", logfile, true)
 
-printh("spoopy_golf initialized", "log.txt", true)
+-- debug log functions
+function trace(msg)
+ printh("trace: " .. msg, logfile)
+end
+
+function debug(msg)
+ printh("debug: " .. msg, logfile)
+end
+
+function info(msg)
+ printh("info: " .. msg, logfile)
+end
+
+function error(msg)
+ printh("error: " .. msg, logfile)
+end
+
+function fatal(msg)
+ printh("fatal: " .. msg, logfile)
+end
+
 
 --class def'ns here
 
@@ -105,7 +127,7 @@ function vec2d:angle()
 end
 
 function vec2d:reflect(normal)
- printh("trace: entering vec2d:reflect with self=" .. self:to_string() .. " and normal=" .. normal:to_string(), "log.txt")
+ trace("entering vec2d:reflect with self=" .. self:to_string() .. " and normal=" .. normal:to_string())
  -- r = d-2(d.n)n where d is the incoming vector (self) and n is the normal vector (normal)
  return self - normal * 2 * self:dot(normal) 
  
@@ -227,7 +249,7 @@ ball = {g_pos=vec2d(64, 64), vel=vec2d(0,0), k=48, k_i = 0}
 normals = {}
 
 holes = {}
-holes[1] = {gt_ball = vec2d(1,1), gt_cam = vec2d(0,0)}
+holes[1] = {gt_ball = vec2d(7,7), gt_cam = vec2d(0,0)}
 holes[2] = {gt_ball = vec2d(19,5), gt_cam = vec2d(16,0)}
 
 friction = 0.1 --todo check what's reasonable, let it be tile dependent (make a friction_k table)
@@ -243,7 +265,7 @@ shot_angle = 0
 shot_counter = 0
 
 function compute_normals_for_circle(is_convex, outer_box, inner_box)
- printh("trace: entering compute_normals_for_circle", "log.txt")
+ trace("entering compute_normals_for_circle with is_convex=" .. tostring(is_convex) .. ", outer_box=(" .. outer_box.x .. "," .. outer_box.y .. "," .. outer_box.w .. "," .. outer_box.h .. "), inner_box=(" .. inner_box.x .. "," .. inner_box.y .. "," .. inner_box.w .. "," .. inner_box.h .. ")")
  local centre = outer_box:centre()
 
  local multiplier
@@ -255,7 +277,6 @@ function compute_normals_for_circle(is_convex, outer_box, inner_box)
    if not inner_box:contains(ipoint) then
     if sget(x,y) == collision_colour then
      local normal_angle = atan2(multiplier*(x-centre.x),multiplier*(y-centre.y))
-     --printh("ipoint = " .. ipoint:to_string(), "log.txt")
      normals[ipoint:to_string()] = normal_angle
      -- add only works for arrays with numerical indices
      --add(normals,normal,ipoint:to_string())
@@ -276,7 +297,7 @@ function compute_parallel_normals_for_single_sprite(k, angle)
 end
 
 function compute_normals()
- printh("entering compute_normals", "log.txt")
+ trace("entering compute_normals")
  -- the convex circle
  local outer_box = box2d(64,0,32,32)
  local inner_box = box2d(72,8,16,16)
@@ -316,6 +337,7 @@ function read_input()
  if btnp(5) then
   ball.vel.x = shot_speed*cos(shot_angle)
   ball.vel.y = shot_speed*sin(shot_angle)
+  info("shot taken with angle " .. shot_angle .. " resulting in velocity " .. ball.vel:to_string())
   ball_stopped = false
   shot_counter += 1
  elseif btn(0) then
@@ -347,6 +369,7 @@ end
 
 function ball_wall_collision_check(test_ball_g_pos)
  -- returns wall collision type or nil
+ -- is it better to return a table or multiple values?
  local ball_pixels = get_pixels_of_sprite(test_ball_g_pos)
  for _,pix in pairs(ball_pixels) do
   local normal_angle = normals[g2ss(pix):to_string()]
@@ -423,6 +446,7 @@ function collision_check_over_path(cur_pix, next_pix)
 end
 
 function handle_ball_movement(cur_pix, move_vec)
+ trace("entering handle_ball_movement with cur_pix=" .. cur_pix:to_string() .. " and move_vec=" .. move_vec:to_string())
  -- move ball along move_vec from cur_pix, handling collisions along the way
  -- return the ball's final position and any movement-ending collision info
  local current = cur_pix
@@ -431,14 +455,16 @@ function handle_ball_movement(cur_pix, move_vec)
  while true do
   -- if the ball ran out of velocity, stop and return
   if remaining == vec2d(0,0) then
-   return {collision_info=nil, final_pos=current}
+   trace("leaving handle_ball_movement with no remaining movement at " .. current:to_string())
+   return nil, current
   end
 
   local next_pix = current + remaining
-  local collision = collision_check_over_path(next_pix)
+  local collision = collision_check_over_path(current, next_pix)
   -- if there was no collision, move the ball to the target and return
   if not collision then
-   return {collision_info=nil, final_pos=next_pix}
+   trace("leaving handle_ball_movement with no collision at " .. next_pix:to_string())
+   return nil, next_pix
   end
 
   -- if we got here, a collision occurred and we should handle it
@@ -446,7 +472,8 @@ function handle_ball_movement(cur_pix, move_vec)
   if collision.type == "hole" then
    ball_stopped = true
    ball.vel = vec2d(0, 0)
-   return {collision_info=collision, final_pos=collision.pix}
+   trace("ball hit hole at " .. collision.pix:to_string())
+   return collision, collision.pix
 
   -- if the ball hit a wall, reflect the remaining movement vector across the wall normal, and continue the loop to check for more collisions along the new path
   elseif collision.type == "wall" then
@@ -455,12 +482,13 @@ function handle_ball_movement(cur_pix, move_vec)
    local remaining_dist = (remaining:magnitude() - travelled) * speed_multiplier_on_reflection
    -- this should almost never happen, only if a high speed_multiplier_on_reflection leads to rounding down to zero
    if remaining_dist <= 0 then
-    return {collision_info=collision, final_pos=collision.last_pix}
+    trace("eaving handle_ball_movement with no remaining movement after reflection at " .. collision.last_pix:to_string())
+    return collision, collision.last_pix
    end
-   printh("trace: ball.vel before reflection: " .. ball.vel:to_string(), "log.txt")
-   printh("trace: collision normal: " .. collision.normal:to_string(), "log.txt")
+   trace("ball.vel before reflection: " .. ball.vel:to_string())
+   trace("collision normal: " .. collision.normal:to_string())
    ball.vel = ball.vel:reflect(collision.normal)
-   printh("trace: ball.vel after reflection: " .. ball.vel:to_string(), "log.txt")
+   trace("ball.vel after reflection: " .. ball.vel:to_string())
    remaining = ball.vel:normalized() * remaining_dist
    current = collision.last_pix
 
@@ -472,12 +500,14 @@ function handle_ball_movement(cur_pix, move_vec)
 end
 
 function update_ball_physics()
+ trace("entering update_ball_physics with ball.vel=" .. ball.vel:to_string())
  -- apply friction only; movement is resolved before this
  local speed = ball.vel:magnitude()
 
  -- this check might be pointless, we really shouldn't be here if speed<=0
  if speed <= 0 then
   ball_stopped = true
+  trace("leaving update_ball_physics with ball stopped due to non-positive speed")
   return
  end
 
@@ -490,14 +520,18 @@ function update_ball_physics()
   ball.vel = ball.vel * (new_speed / speed)
   -- the safest thing to do is check here if ball.vel.speed <= 0, but that's probably overkill
  end
+ trace("leaving update_ball_physics with ball.vel=" .. ball.vel:to_string())
 end
 
 function ball_update()
+ trace("entering ball_update with ball.g_pos=" .. ball.g_pos:to_string() .. " and ball.vel=" .. ball.vel:to_string())
  local cur_pos = ball.g_pos
  local collision_info, final_pos = handle_ball_movement(cur_pos, ball.vel)
  ball.g_pos = final_pos
+ trace("ball moved to " .. ball.g_pos:to_string())
 
  if collision_info and collision_info.type == "hole" then
+  trace("ball_update detected hole collision")
   hole_num += 1
   if hole_num > #holes then
    win = true
@@ -510,11 +544,13 @@ function ball_update()
  if not ball_stopped then
   update_ball_physics()
  end
+ trace("leaving ball_update with ball.g_pos=" .. ball.g_pos:to_string() .. " and ball.vel=" .. ball.vel:to_string())
 end
 
 function init_hole(num)
- printh("trace: entering init_hole(" .. num .. ")", "log.txt")
- ball.pos = gt2g(holes[num].gt_ball) -- convert from tile to global pixel coords
+ trace("entering init_hole(" .. num .. ")")
+ trace("hole data: gt_ball=" .. holes[num].gt_ball:to_string() .. ", gt_cam=" .. holes[num].gt_cam:to_string())
+ ball.g_pos = gt2g(holes[num].gt_ball) -- convert from tile to global pixel coords
  camera(holes[num].gt_cam.x,holes[num].gt_cam.y)
  ball.vel = vec2d(0, 0)
  ball_stopped = true
@@ -524,18 +560,20 @@ function init_hole(num)
 end
 
 function _init()
- printh("trace: entering _init", "log.txt")
+ trace("entering _init")
  compute_normals()
  init_hole(1)
 end
 
 function _update()
- printh("trace: entering _update", "log.txt")
+ trace("entering _update")
  if not win then
   read_input()
  end
  if not ball_stopped then
+  trace("ball position before update: " .. ball.g_pos:to_string())
   ball_update()
+  trace("ball position after update: " .. ball.g_pos:to_string())
  end
 end
 
@@ -577,7 +615,7 @@ function draw_ball()
    end
   end
  end
- printh("trace: drawing ball at " .. ball.g_pos:to_string() .. " with sprite " .. ball.k, "log.txt")
+ trace("drawing ball at " .. ball.g_pos:to_string() .. " with sprite " .. ball.k)
  spr(ball.k,ball.g_pos.x,ball.g_pos.y)
 end
 
@@ -613,7 +651,7 @@ function draw_display()
 end
 
 function _draw()
- printh("trace: entering _draw", "log.txt")
+ trace("entering _draw")
  cls()
  map()
  if not win then
