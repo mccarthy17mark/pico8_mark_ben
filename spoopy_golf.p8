@@ -169,7 +169,7 @@ function box2d:contains(point)
 end
 
 function box2d:centre()
- return vec2d((self.x+self.w)/2,(self.y+self.h)/2)
+ return vec2d(self.x+self.w/2,self.y+self.h/2)
 end
 
 -->8
@@ -239,7 +239,7 @@ end
 
 -->8
 
-collision_colour = 5
+collision_colour = 6
 
 ball = {g_pos=vec2d(64, 64), vel=vec2d(0,0), k=48, k_i = 0}
 
@@ -263,6 +263,13 @@ shot_display = {x=1, y=1, text = "stroke no: "}
 
 shot_angle = 0
 shot_counter = 0
+
+-- the following is all in pixels
+function set_camera(x, y)
+ g_camera.x = x
+ g_camera.y = y
+ camera(x, y)
+end
 
 function compute_normals_for_circle(is_convex, outer_box, inner_box)
  trace("entering compute_normals_for_circle with is_convex=" .. tostring(is_convex) .. ", outer_box=(" .. outer_box.x .. "," .. outer_box.y .. "," .. outer_box.w .. "," .. outer_box.h .. "), inner_box=(" .. inner_box.x .. "," .. inner_box.y .. "," .. inner_box.w .. "," .. inner_box.h .. ")")
@@ -290,8 +297,10 @@ function compute_parallel_normals_for_single_sprite(k, angle)
  local top_left = k2ss(k)
  for y = top_left.y, top_left.y + 7 do
   for x = top_left.x, top_left.x + 7 do
-   local point = vec2d(x,y)
-   normals[point:to_string()] = angle
+   if sget(x,y) == collision_colour then
+    local point = vec2d(x,y)
+    normals[point:to_string()] = angle
+   end
   end
  end
 end
@@ -327,10 +336,10 @@ function compute_normals()
  compute_parallel_normals_for_single_sprite(38,0.5)
  compute_parallel_normals_for_single_sprite(39,0.75)
 
- compute_parallel_normals_for_single_sprite(52,0)
- compute_parallel_normals_for_single_sprite(53,0.25)
- compute_parallel_normals_for_single_sprite(54,0.5)
- compute_parallel_normals_for_single_sprite(55,0.75)
+ compute_parallel_normals_for_single_sprite(52,0.25)
+ compute_parallel_normals_for_single_sprite(53,0.5)
+ compute_parallel_normals_for_single_sprite(54,0.75)
+ compute_parallel_normals_for_single_sprite(55,0)
 end
 
 function read_input()
@@ -382,16 +391,18 @@ function ball_wall_collision_check(test_ball_g_pos)
  return nil
 end
 
-function collision_check_at_position(test_ball_g_pos)
+function collision_check_at_position(test_ball_g_pos, last_pix)
  -- returns collision type or nil
+ -- last_pix is the last known non-colliding pixel along the path, attached to any collision found here
  local test_ball_g_pos_centre = test_ball_g_pos + vec2d(4,4)
  local tile = g2k(test_ball_g_pos_centre)
  if tile == 18 then
-  return {type="hole", pix=test_ball_g_pos_centre}
+  return {type="hole", pix=test_ball_g_pos_centre, last_pix=last_pix}
  end
 
  local wall_collision = ball_wall_collision_check(test_ball_g_pos)
  if wall_collision then
+  wall_collision.last_pix = last_pix
   return wall_collision
  end
 
@@ -436,13 +447,14 @@ function collision_check_over_path(cur_pix, next_pix)
    end
   end
 
-  local collision = collision_check_at_position(check_pix)
+  local collision = collision_check_at_position(check_pix, last_pix)
   if collision then
    return collision
   end
+  last_pix = vec2d(check_pix.x, check_pix.y)
  end
 
- return collision_check_at_position(check_pix)  -- check for collision at the final target pixel as well
+ return collision_check_at_position(check_pix, last_pix)  -- check for collision at the final target pixel as well
 end
 
 function handle_ball_movement(cur_pix, move_vec)
@@ -549,14 +561,20 @@ end
 
 function init_hole(num)
  trace("entering init_hole(" .. num .. ")")
+
+ if num > #holes then
+  -- this means the last hole was hit, no need to init a new one.
+  return
+ end
+
  trace("hole data: gt_ball=" .. holes[num].gt_ball:to_string() .. ", gt_cam=" .. holes[num].gt_cam:to_string())
  ball.g_pos = gt2g(holes[num].gt_ball) -- convert from tile to global pixel coords
- camera(holes[num].gt_cam.x,holes[num].gt_cam.y)
+ set_camera(gt2g(holes[num].gt_cam.x),gt2g(holes[num].gt_cam.y))
  ball.vel = vec2d(0, 0)
  ball_stopped = true
  -- we can add an offset here. gets updated rarely, not once per frame
- shot_display.x = holes[num].gt_cam.x + 1
- shot_display.y = holes[num].gt_cam.y + 1
+ shot_display.x = gt2g(holes[num].gt_cam.x) + 1
+ shot_display.y = gt2g(holes[num].gt_cam.y) + 1
 end
 
 function _init()
@@ -643,9 +661,9 @@ function draw_arrow()
 end
 
 function draw_display()
- rectfill(0, 0, 8*16, 8*2, 5)
+ rectfill(g_camera.x, g_camera.y, g_camera.x+8*16, g_camera.y+8*2, 5)
  if win then
-  print("winner!", holes[hole_num].gt_cam.x + 8*8, holes[hole_num].gt_cam.y+1, 7)
+  print("winner!", g_camera.x+8*8, g_camera.y+1, 7)
  end
  print(shot_display.text .. shot_counter, shot_display.x, shot_display.y, 7)
 end
