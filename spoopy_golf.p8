@@ -141,6 +141,14 @@ function vec2d:reflect(normal)
  -- return self:rotate(2*angle_diff, vec2d(0,0))
 end
 
+function axis_pixel_step(v)
+ -- reduces an arbitrary vector to a one-pixel, axis-aligned step along its dominant axis
+ if abs(v.x) >= abs(v.y) then
+  return vec2d(sgn(v.x), 0)
+ end
+ return vec2d(0, sgn(v.y))
+end
+
 box2d = {}
 box2d.__index = box2d
 
@@ -254,6 +262,7 @@ holes[2] = {gt_ball = vec2d(19,5), gt_cam = vec2d(16,0)}
 
 friction = 0.1 --todo check what's reasonable, let it be tile dependent (make a friction_k table)
 speed_multiplier_on_reflection = 0.75
+min_travel_for_bounce = 0.5 -- below this, a reflection would send the ball right back into the same pixel, so slide instead
 shot_speed = 3
 hole_num = 1
 
@@ -494,15 +503,27 @@ function handle_ball_movement(cur_pix, move_vec)
    local remaining_dist = (remaining:magnitude() - travelled) * speed_multiplier_on_reflection
    -- this should almost never happen, only if a high speed_multiplier_on_reflection leads to rounding down to zero
    if remaining_dist <= 0 then
-    trace("eaving handle_ball_movement with no remaining movement after reflection at " .. collision.last_pix:to_string())
+    trace("leaving handle_ball_movement with no remaining movement after reflection at " .. collision.last_pix:to_string())
     return collision, collision.last_pix
    end
-   trace("ball.vel before reflection: " .. ball.vel:to_string())
+   trace("ball.vel before collision response: " .. ball.vel:to_string())
    trace("collision normal: " .. collision.normal:to_string())
-   ball.vel = ball.vel:reflect(collision.normal)
-   trace("ball.vel after reflection: " .. ball.vel:to_string())
+   if travelled < min_travel_for_bounce then
+    -- want to avoid shallow angles that get stuck on a curve, the reflected vel not different enough to avoid
+    -- collision. Nudging the ball out along the normal is what mario64 did.
+    local nudged_pix = collision.last_pix + axis_pixel_step(collision.normal)
+    if collision_check_at_position(nudged_pix, nudged_pix) then
+     current = collision.last_pix
+    else
+     current = nudged_pix
+    end
+    trace("ball.vel after slide: " .. ball.vel:to_string() .. ", nudged to " .. current:to_string())
+   else
+    ball.vel = ball.vel:reflect(collision.normal)
+    current = collision.last_pix
+    trace("ball.vel after reflection: " .. ball.vel:to_string())
+   end
    remaining = ball.vel:normalized() * remaining_dist
-   current = collision.last_pix
 
   -- add more collision types here as needed
   else
@@ -584,7 +605,7 @@ function _init()
 end
 
 function _update()
- trace("entering _update")
+ --trace("entering _update")
  if not win then
   read_input()
  end
@@ -633,7 +654,7 @@ function draw_ball()
    end
   end
  end
- trace("drawing ball at " .. ball.g_pos:to_string() .. " with sprite " .. ball.k)
+ --trace("drawing ball at " .. ball.g_pos:to_string() .. " with sprite " .. ball.k)
  spr(ball.k,ball.g_pos.x,ball.g_pos.y)
 end
 
@@ -669,7 +690,7 @@ function draw_display()
 end
 
 function _draw()
- trace("entering _draw")
+ --trace("entering _draw")
  cls()
  map()
  if not win then
